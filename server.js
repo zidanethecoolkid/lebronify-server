@@ -1,51 +1,55 @@
+// server.js
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer');
 const { createClient } = require('@supabase/supabase-js');
+const path = require('path');
+const fs = require('fs');
+
 const app = express();
 const PORT = process.env.PORT || 3001;
 
 app.use(cors());
-app.use(express.json());
+app.use('/songs', express.static('uploads'));
 
-// Setup Supabase
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
-
-// Multer config
-const storage = multer.memoryStorage();
-const upload = multer({ storage: storage });
-
-// Upload route
-app.post('/upload', upload.single('audio'), async (req, res) => {
-  const file = req.file;
-  const { title, artist } = req.body;
-
-  if (!file) return res.status(400).send('No file uploaded');
-
-  const fileExt = file.originalname.split('.').pop();
-  const fileName = `${Date.now()}.${fileExt}`;
-
-  const { data, error } = await supabase.storage
-    .from('songs') // Make sure this bucket exists in Supabase
-    .upload(fileName, file.buffer, {
-      contentType: file.mimetype,
-    });
-
-  if (error) return res.status(500).send(error.message);
-
-  const publicURL = `${process.env.SUPABASE_URL}/storage/v1/object/public/songs/${fileName}`;
-
-  res.json({
-    title,
-    artist,
-    fileUrl: publicURL,
-  });
+const storage = multer.diskStorage({
+  destination: 'uploads/',
+  filename: (req, file, cb) => cb(null, Date.now() + '-' + file.originalname)
 });
 
-// Default route
+const upload = multer({ storage });
+
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+
+// Upload endpoint
+app.post('/upload', upload.single('audio'), async (req, res) => {
+  try {
+    const file = req.file;
+    const { title, artist } = req.body;
+
+    if (!file) return res.status(400).json({ error: 'No file uploaded' });
+
+    const fileBuffer = fs.readFileSync(file.path);
+    const { data, error } = await supabase.storage
+      .from('songs') // Make sure this bucket exists in Supabase!
+      .upload(`public/${file.filename}`, fileBuffer, {
+        contentType: file.mimetype,
+      });
+
+    if (error) throw error;
+
+    const publicURL = supabase.storage.from('songs').getPublicUrl(`public/${file.filename}`).data.publicUrl;
+
+    res.json({ title, artist, url: publicURL });
+  } catch (err) {
+    console.error('Upload failed:', err.message);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
 app.get('/', (req, res) => {
-  res.send('LeBronify Server is running with Supabase!');
+  res.send('LeBronify Server is running!');
 });
 
 app.listen(PORT, () => {
